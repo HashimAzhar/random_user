@@ -1,3 +1,4 @@
+// map_location_notifier.dart
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart';
@@ -29,6 +30,13 @@ class MapLocationNotifier extends AsyncNotifier<LatLng> {
     // Get current location
     final currentLocation = await location.getLocation();
     return LatLng(currentLocation.latitude!, currentLocation.longitude!);
+  }
+
+  Future<LatLng> refreshLocation() async {
+    state = const AsyncLoading();
+    final newLocation = await build();
+    state = AsyncData(newLocation);
+    return newLocation;
   }
 }
 
