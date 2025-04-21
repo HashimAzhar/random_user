@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "264130129228",
+    "project_id": "oceanic-hook-448911-m7",
+    "storage_bucket": "oceanic-hook-448911-m7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:264130129228:android:1d337daac838dce513f3e9",
+        "android_client_info": {
+          "package_name": "com.example.random_user"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC7VJHIA6R0YzG8Ba9IRrhGEqXHXFPDFeg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:264130129228:android:b2343a2214aac2b813f3e9",
+        "android_client_info": {
+          "package_name": "com.example.untitled"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC7VJHIA6R0YzG8Ba9IRrhGEqXHXFPDFeg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
