@@ -1,229 +1,346 @@
-// map_view_model.dart
+// import 'dart:async';
+
+// import 'package:flutter_riverpod/flutter_riverpod.dart';
+// import 'package:google_maps_flutter/google_maps_flutter.dart';
+// import 'package:random_user/models/Google_Maps/map_state.dart';
+
+// final mapViewModelProvider = AsyncNotifierProvider<MapViewModel, MapState>(
+//   () => MapViewModel(),
+// );
+
+// class MapViewModel extends AsyncNotifier<MapState> {
+//   Timer? _locationTimer;
+//   StreamSubscription<LatLng>? _locationSubscription;
+
+//   @override
+//   FutureOr<MapState> build() async {
+//     // Initialize with default state
+//     return MapState();
+//   }
+
+//   void setCurrentLocation(LatLng location) {
+//     if (state.isLoading || state.hasError) return;
+//     state = AsyncData(state.value!.copyWith(currentLocation: location));
+
+//     // If tracking is active, add to live tracking points
+//     if (state.value?.isTracking == true) {
+//       _addLiveTrackingPoint(location);
+//     }
+//   }
+
+//   void setFromLocation(LatLng location, String name) {
+//     if (state.isLoading || state.hasError) return;
+//     state = AsyncData(
+//       state.value!.copyWith(
+//         fromLocation: location,
+//         fromLocationName: name,
+//         route: [], // Clear existing route when from location changes
+//       ),
+//     );
+//   }
+
+//   void setToLocation(LatLng location, String name) {
+//     if (state.isLoading || state.hasError) return;
+//     state = AsyncData(
+//       state.value!.copyWith(
+//         toLocation: location,
+//         toLocationName: name,
+//         route: [], // Clear existing route when to location changes
+//       ),
+//     );
+//   }
+
+//   void setRoute(List<LatLng> route) {
+//     if (state.isLoading || state.hasError) return;
+//     state = AsyncData(state.value!.copyWith(route: route));
+//   }
+
+//   void startLiveTracking() {
+//     if (state.value == null || state.value!.isTracking) return;
+
+//     state = AsyncData(
+//       state.value!.copyWith(isTracking: true, liveTrackingPoints: []),
+//     );
+
+//     // Start listening to location updates
+//     // Note: Replace with actual location service implementation
+//     _locationTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+//       final current = state.value?.currentLocation;
+//       if (current != null) {
+//         _addLiveTrackingPoint(current);
+//       }
+//     });
+//   }
+
+//   void stopLiveTracking() {
+//     _locationTimer?.cancel();
+//     _locationSubscription?.cancel();
+//     if (state.value != null) {
+//       state = AsyncData(state.value!.copyWith(isTracking: false));
+//     }
+//   }
+
+//   void refreshMap() {
+//     _locationTimer?.cancel();
+//     _locationSubscription?.cancel();
+//     state = AsyncData(MapState(currentLocation: state.value?.currentLocation));
+//   }
+
+//   void _addLiveTrackingPoint(LatLng point) {
+//     final updated = List<LatLng>.from(state.value!.liveTrackingPoints);
+//     updated.add(point);
+
+//     // Keep only the last 20 points for performance
+//     if (updated.length > 20) {
+//       updated.removeAt(0);
+//     }
+
+//     state = AsyncData(state.value!.copyWith(liveTrackingPoints: updated));
+//   }
+
+//   @override
+//   void dispose() {
+//     _locationTimer?.cancel();
+//     _locationSubscription?.cancel();
+//     // super.dispose();
+//   }
+// }
 
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/material.dart';
+import 'dart:math';
+import 'dart:ui';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'package:location/location.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'package:random_user/test_things/maptestplaces/place_model.dart';
+import 'package:random_user/models/Google_Maps/map_state.dart';
+import 'package:random_user/models/Google_Maps/place_model.dart';
 
-final mapViewModelProvider = AsyncNotifierProvider<MapViewModel, void>(
-  MapViewModel.new,
-);
+class MapController extends StateNotifier<MapState> {
+  final Ref ref;
 
-class MapViewModel extends AsyncNotifier<void> {
-  GoogleMapController? _mapController;
-  LatLng? _currentPosition;
-  PlaceModel? _fromPlace;
-  PlaceModel? _toPlace;
+  Timer? locationTimer;
+  final FirebaseDatabase _database = FirebaseDatabase.instance;
 
-  Set<Marker> _markers = {};
-  Set<Polyline> _polylines = {};
-  String _distanceText = "";
-  List<LatLng> _fullRoute = [];
-  int _coveredPointIndex = 0;
-  bool _tracking = false;
-  StreamSubscription<Position>? _positionStream;
+  MapController(this.ref) : super(MapState());
 
-  final DatabaseReference _locationRef = FirebaseDatabase.instance.ref(
-    'live_tracking',
-  );
-
-  // 👇 Exposed Getters for UI to use
-  LatLng? get currentPosition => _currentPosition;
-  Set<Marker> get markers => _markers;
-  Set<Polyline> get polylines => _polylines;
-  String get distanceText => _distanceText;
-  bool get tracking => _tracking;
-
-  @override
-  Future<void> build() async {
-    await _getCurrentLocation();
+  void setController(GoogleMapController controller) {
+    state = state.copyWith(controller: controller);
   }
 
-  Future<void> _getCurrentLocation() async {
-    final hasPermission = await Geolocator.requestPermission();
-    if (hasPermission == LocationPermission.denied ||
-        hasPermission == LocationPermission.deniedForever)
-      return;
+  Future<void> initLocation() async {
+    final Location location = Location();
 
-    final pos = await Geolocator.getCurrentPosition();
-    _currentPosition = LatLng(pos.latitude, pos.longitude);
-    state = const AsyncData(null);
-  }
+    bool serviceEnabled = await location.serviceEnabled();
+    if (!serviceEnabled) {
+      serviceEnabled = await location.requestService();
+    }
 
-  void setMapController(GoogleMapController controller) {
-    _mapController = controller;
-  }
+    PermissionStatus permissionGranted = await location.hasPermission();
+    if (permissionGranted == PermissionStatus.denied) {
+      permissionGranted = await location.requestPermission();
+    }
 
-  void setFromPlace(PlaceModel place) {
-    _fromPlace = place;
-    _markers.add(
-      Marker(
-        markerId: const MarkerId('from'),
-        position: LatLng(place.lat, place.lon),
-        infoWindow: const InfoWindow(title: 'From'),
-      ),
-    );
-    _maybeDrawRoute();
-    state = const AsyncData(null);
-  }
-
-  void setToPlace(PlaceModel place) {
-    _toPlace = place;
-    _markers.add(
-      Marker(
-        markerId: const MarkerId('to'),
-        position: LatLng(place.lat, place.lon),
-        infoWindow: const InfoWindow(title: 'To'),
-      ),
-    );
-    _maybeDrawRoute();
-    state = const AsyncData(null);
-  }
-
-  void _maybeDrawRoute() {
-    if (_fromPlace != null && _toPlace != null) {
-      _drawRoute();
+    if (permissionGranted == PermissionStatus.granted) {
+      final current = await location.getLocation();
+      final currentLatLng = LatLng(current.latitude!, current.longitude!);
+      state = state.copyWith(currentPosition: currentLatLng);
+      _moveCamera(currentLatLng);
     }
   }
 
-  Future<void> _drawRoute() async {
-    final from = '${_fromPlace!.lon},${_fromPlace!.lat}';
-    final to = '${_toPlace!.lon},${_toPlace!.lat}';
-    final url = Uri.parse(
-      'https://router.project-osrm.org/route/v1/driving/$from;$to?overview=full&geometries=geojson',
-    );
-    final res = await http.get(url);
-
-    if (res.statusCode == 200) {
-      final data = json.decode(res.body);
-      final route = data['routes'][0];
-      _distanceText = (route['distance'] / 1000).toStringAsFixed(2);
-      final coords = route['geometry']['coordinates'];
-      _fullRoute = coords.map<LatLng>((e) => LatLng(e[1], e[0])).toList();
-      _coveredPointIndex = 0;
-      _updatePolylines();
-
-      _mapController?.animateCamera(
-        CameraUpdate.newLatLngBounds(_boundsFromLatLngList(_fullRoute), 100),
-      );
-
-      state = const AsyncData(null);
-    }
+  void _moveCamera(LatLng target) {
+    state.controller?.animateCamera(CameraUpdate.newLatLng(target));
   }
 
-  LatLngBounds _boundsFromLatLngList(List<LatLng> list) {
-    double? x0, x1, y0, y1;
-    for (LatLng latLng in list) {
-      x0 ??= latLng.latitude;
-      x1 ??= latLng.latitude;
-      y0 ??= latLng.longitude;
-      y1 ??= latLng.longitude;
+  void setFromLocation(PlaceModel place) {
+    final marker = Marker(
+      markerId: MarkerId('from'),
+      position: LatLng(place.lat, place.lon),
+      infoWindow: InfoWindow(title: 'Start: ${place.displayName}'),
+    );
+    state = state.copyWith(
+      fromPlace: place,
+      markers: {...state.markers, marker},
+    );
+    _moveCamera(marker.position);
+  }
 
-      x0 = x0 < latLng.latitude ? x0 : latLng.latitude;
-      x1 = x1 > latLng.latitude ? x1 : latLng.latitude;
-      y0 = y0 < latLng.longitude ? y0 : latLng.longitude;
-      y1 = y1 > latLng.longitude ? y1 : latLng.longitude;
-    }
-    return LatLngBounds(
-      northeast: LatLng(x1!, y1!),
-      southwest: LatLng(x0!, y0!),
+  void setToLocation(PlaceModel place) {
+    final marker = Marker(
+      markerId: MarkerId('to'),
+      position: LatLng(place.lat, place.lon),
+      infoWindow: InfoWindow(title: 'End: ${place.displayName}'),
+    );
+    state = state.copyWith(toPlace: place, markers: {...state.markers, marker});
+    _moveCamera(marker.position);
+    getRouteAndDistance();
+  }
+
+  Future<void> getRouteAndDistance() async {
+    if (state.fromPlace == null || state.toPlace == null) return;
+
+    final url =
+        'http://router.project-osrm.org/route/v1/driving/${state.fromPlace!.lon},${state.fromPlace!.lat};${state.toPlace!.lon},${state.toPlace!.lat}?overview=full&geometries=geojson';
+
+    final response = await http.get(Uri.parse(url));
+    final data = json.decode(response.body);
+
+    final coords = data['routes'][0]['geometry']['coordinates'] as List;
+    final distance = data['routes'][0]['distance'] / 1000;
+    final duration = data['routes'][0]['duration'] / 60;
+
+    final route = coords.map((c) => LatLng(c[1], c[0])).toList();
+
+    final polyline = Polyline(
+      polylineId: PolylineId('route'),
+      color: const Color(0xFF2196F3),
+      width: 5,
+      points: route,
+    );
+
+    state = state.copyWith(
+      fullRoute: route,
+      distanceText:
+          "${distance.toStringAsFixed(2)} km / ${duration.toStringAsFixed(0)} min",
+      polylines: {polyline},
     );
   }
 
-  void _updatePolylines() {
-    final List<LatLng> coveredPath = _fullRoute.sublist(
-      0,
-      _coveredPointIndex + 1,
+  void setRoute(List<LatLng> route) {
+    final polyline = Polyline(
+      polylineId: PolylineId('route'),
+      color: const Color(0xFF2196F3),
+      width: 5,
+      points: route,
     );
-    final List<LatLng> remainingPath = _fullRoute.sublist(_coveredPointIndex);
 
-    _polylines = {
-      Polyline(
-        polylineId: const PolylineId('coveredPath'),
-        color: Colors.grey,
-        width: 5,
-        points: coveredPath,
-      ),
-      Polyline(
-        polylineId: const PolylineId('remainingPath'),
-        color: Colors.blue,
-        width: 5,
-        points: remainingPath,
-      ),
-    };
+    state = state.copyWith(fullRoute: route, polylines: {polyline});
   }
 
-  void startTracking() {
-    if (_tracking || _currentPosition == null) return;
+  void startTrip() {
+    state = state.copyWith(
+      tripInProgress: true,
+      tracking: true,
+      coveredPointIndex: 0,
+    );
+    _startLocationUpdates();
+  }
 
-    _tracking = true;
-    _coveredPointIndex = _findClosestPointIndex(_currentPosition!);
-    _updatePolylines();
-    state = const AsyncData(null);
+  void _startLocationUpdates() {
+    locationTimer?.cancel();
 
-    _positionStream = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10,
-      ),
-    ).listen((Position position) {
-      final newPosition = LatLng(position.latitude, position.longitude);
-      _currentPosition = newPosition;
-      _coveredPointIndex = _findClosestPointIndex(newPosition);
-      _updatePolylines();
-      _sendLocationToFirebase(newPosition);
-      state = const AsyncData(null);
+    locationTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      final current = await Location().getLocation();
+      final currentLatLng = LatLng(current.latitude!, current.longitude!);
+
+      // Store in Firebase
+      final userId = 'user_1'; // You can make this dynamic
+      final path = 'tracking/$userId';
+      final snapshot = await _database.ref(path).get();
+
+      final locations = <Map<String, dynamic>>[];
+      if (snapshot.exists) {
+        final existing = Map<String, dynamic>.from(snapshot.value as Map);
+        locations.addAll(existing.values.cast<Map<String, dynamic>>());
+      }
+
+      if (locations.length >= 10) {
+        locations.removeAt(0);
+      }
+
+      locations.add({
+        'lat': currentLatLng.latitude,
+        'lng': currentLatLng.longitude,
+        'timestamp': DateTime.now().toIso8601String(),
+      });
+
+      final updatedMap = {
+        for (int i = 0; i < locations.length; i++) 'loc$i': locations[i],
+      };
+
+      await _database.ref(path).set(updatedMap);
+
+      _updateCoveredPath(currentLatLng);
     });
   }
 
-  int _findClosestPointIndex(LatLng position) {
-    double minDistance = double.infinity;
-    int closestIndex = 0;
+  void _updateCoveredPath(LatLng current) {
+    final route = state.fullRoute;
+    if (route.isEmpty) return;
 
-    for (int i = 0; i < _fullRoute.length; i++) {
-      final d = Geolocator.distanceBetween(
-        position.latitude,
-        position.longitude,
-        _fullRoute[i].latitude,
-        _fullRoute[i].longitude,
-      );
-      if (d < minDistance) {
-        minDistance = d;
-        closestIndex = i;
-      }
+    int newIndex = state.coveredPointIndex;
+
+    while (newIndex < route.length &&
+        _calculateDistance(route[newIndex], current) < 0.05) {
+      newIndex++;
     }
-    return closestIndex;
+
+    final covered = route.sublist(0, newIndex);
+    final remaining = route.sublist(newIndex);
+
+    final coveredPolyline = Polyline(
+      polylineId: PolylineId('covered'),
+      color: const Color(0xFF4CAF50),
+      width: 6,
+      points: covered,
+    );
+
+    final remainingPolyline = Polyline(
+      polylineId: PolylineId('remaining'),
+      color: const Color(0xFF2196F3),
+      width: 6,
+      points: remaining,
+    );
+
+    state = state.copyWith(
+      polylines: {coveredPolyline, remainingPolyline},
+      coveredPointIndex: newIndex,
+    );
   }
 
-  void _sendLocationToFirebase(LatLng position) async {
-    final locationData = {
-      'lat': position.latitude,
-      'lng': position.longitude,
-      'timestamp': DateTime.now().toIso8601String(),
-    };
+  double _calculateDistance(LatLng p1, LatLng p2) {
+    const double R = 6371;
+    final dLat = _degToRad(p2.latitude - p1.latitude);
+    final dLng = _degToRad(p2.longitude - p1.longitude);
 
-    final event = await _locationRef.once();
-    final currentLocations = event.snapshot.value;
+    final a =
+        sin(dLat / 2) * sin(dLat / 2) +
+        cos(_degToRad(p1.latitude)) *
+            cos(_degToRad(p2.latitude)) *
+            sin(dLng / 2) *
+            sin(dLng / 2);
 
-    if (currentLocations is Map) {
-      final locationsMap = Map<String, dynamic>.from(currentLocations);
-      if (locationsMap.length >= 10) {
-        final firstKey = locationsMap.keys.first;
-        _locationRef.child(firstKey).remove();
-      }
-    }
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return R * c;
+  }
 
-    _locationRef.push().set(locationData);
+  double _degToRad(double deg) => deg * (pi / 180);
+
+  void refreshMap() {
+    locationTimer?.cancel();
+    state = state.copyWith(
+      markers: {},
+      polylines: {},
+      fullRoute: [],
+      tracking: false,
+      tripInProgress: false,
+      coveredPointIndex: 0,
+      distanceText: '',
+    );
   }
 
   @override
   void dispose() {
-    _positionStream?.cancel();
-    // super.dispose();
+    locationTimer?.cancel();
+    super.dispose();
   }
 }
+
+final mapControllerProvider = StateNotifierProvider<MapController, MapState>((
+  ref,
+) {
+  return MapController(ref);
+});

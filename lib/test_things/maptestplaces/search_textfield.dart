@@ -140,3 +140,59 @@ class _SearchTextFieldState extends State<SearchTextField> {
     );
   }
 }
+
+// import 'package:flutter/material.dart';
+// import 'package:flutter_riverpod/flutter_riverpod.dart';
+// import 'package:random_user/viewmodels/Google_Maps/place_search_view_model.dart';
+
+// class SearchPlacesScreen extends ConsumerWidget {
+//   final String label;
+//   const SearchPlacesScreen({super.key, required this.label});
+
+//   @override
+//   Widget build(BuildContext context, WidgetRef ref) {
+//     final controller = TextEditingController();
+//     final state = ref.watch(placeSearchProvider);
+//     final notifier = ref.read(placeSearchProvider.notifier);
+
+//     return Scaffold(
+//       appBar: AppBar(title: Text('Search $label')),
+//       body: Column(
+//         children: [
+//           Padding(
+//             padding: const EdgeInsets.all(12.0),
+//             child: TextField(
+//               controller: controller,
+//               decoration: InputDecoration(
+//                 hintText: 'Enter place name',
+//                 suffixIcon: IconButton(
+//                   icon: const Icon(Icons.search),
+//                   onPressed: () {
+//                     if (controller.text.isNotEmpty) {
+//                       notifier.search(controller.text);
+//                     }
+//                   },
+//                 ),
+//               ),
+//             ),
+//           ),
+//           if (state.isLoading)
+//             const CircularProgressIndicator()
+//           else
+//             Expanded(
+//               child: ListView.builder(
+//                 itemCount: state.results.length,
+//                 itemBuilder: (context, index) {
+//                   final place = state.results[index];
+//                   return ListTile(
+//                     title: Text('${place.lat}, ${place.lon}'),
+//                     onTap: () => Navigator.pop(context, place),
+//                   );
+//                 },
+//               ),
+//             ),
+//         ],
+//       ),
+//     );
+//   }
+// }

@@ -5,6 +5,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_database/firebase_database.dart';
+import 'package:random_user/test_things/historyscreen.dart';
 import 'package:random_user/test_things/maptestplaces/place_model.dart';
 import 'package:random_user/test_things/maptestplaces/search_textfield.dart';
 
@@ -28,11 +29,12 @@ class _MapScreennState extends State<MapScreenn> {
   List<LatLng> _fullRoute = [];
   int _coveredPointIndex = 0;
   bool _tracking = false;
+  bool _tripInProgress = false;
   StreamSubscription<Position>? _positionStream;
 
-  final DatabaseReference _locationRef = FirebaseDatabase.instance.ref(
-    'live_tracking',
-  );
+  final String _userId = 'sampleUserId'; // Replace with actual user ID
+  late DatabaseReference _locationRef;
+  late DatabaseReference _historyRef;
 
   @override
   void dispose() {
@@ -42,6 +44,8 @@ class _MapScreennState extends State<MapScreenn> {
 
   @override
   void initState() {
+    _locationRef = FirebaseDatabase.instance.ref('live_tracking/$_userId');
+    _historyRef = FirebaseDatabase.instance.ref('location_history/$_userId');
     super.initState();
     _getCurrentLocation();
   }
@@ -82,8 +86,8 @@ class _MapScreennState extends State<MapScreenn> {
         _fullRoute = coords.map<LatLng>((e) => LatLng(e[1], e[0])).toList();
         _coveredPointIndex = 0;
         _updatePolylines();
+        _updateMarkers();
 
-        // Zoom to fit the entire route
         _mapController?.animateCamera(
           CameraUpdate.newLatLngBounds(_boundsFromLatLngList(_fullRoute), 100),
         );
@@ -137,16 +141,35 @@ class _MapScreennState extends State<MapScreenn> {
     });
   }
 
-  void _onFromSelected(PlaceModel place) {
-    setState(() {
-      _fromPlace = place;
+  void _updateMarkers() {
+    _markers.clear();
+    if (_fromPlace != null) {
       _markers.add(
         Marker(
           markerId: const MarkerId('from'),
-          position: LatLng(place.lat, place.lon),
-          infoWindow: const InfoWindow(title: 'From'),
+          position: LatLng(_fromPlace!.lat, _fromPlace!.lon),
+          infoWindow: InfoWindow(
+            title: 'From',
+            snippet: _fromPlace!.displayName,
+          ),
         ),
       );
+    }
+    if (_toPlace != null) {
+      _markers.add(
+        Marker(
+          markerId: const MarkerId('to'),
+          position: LatLng(_toPlace!.lat, _toPlace!.lon),
+          infoWindow: InfoWindow(title: 'To', snippet: _toPlace!.displayName),
+        ),
+      );
+    }
+  }
+
+  void _onFromSelected(PlaceModel place) {
+    setState(() {
+      _fromPlace = place;
+      _updateMarkers();
     });
     _maybeDrawRoute();
   }
@@ -154,13 +177,7 @@ class _MapScreennState extends State<MapScreenn> {
   void _onToSelected(PlaceModel place) {
     setState(() {
       _toPlace = place;
-      _markers.add(
-        Marker(
-          markerId: const MarkerId('to'),
-          position: LatLng(place.lat, place.lon),
-          infoWindow: const InfoWindow(title: 'To'),
-        ),
-      );
+      _updateMarkers();
     });
     _maybeDrawRoute();
   }
@@ -172,10 +189,11 @@ class _MapScreennState extends State<MapScreenn> {
   }
 
   void _startTracking() {
-    if (_tracking) return;
+    if (_tracking || _toPlace == null) return;
 
     setState(() {
       _tracking = true;
+      _tripInProgress = true;
       if (_currentPosition != null && _fullRoute.isNotEmpty) {
         _coveredPointIndex = _findClosestPointIndex(_currentPosition!);
         _updatePolylines();
@@ -183,18 +201,18 @@ class _MapScreennState extends State<MapScreenn> {
     });
 
     _positionStream = Geolocator.getPositionStream(
-      locationSettings: LocationSettings(
+      locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
         distanceFilter: 10,
       ),
     ).listen((Position position) {
       final newPosition = LatLng(position.latitude, position.longitude);
-
       setState(() {
         _currentPosition = newPosition;
         _coveredPointIndex = _findClosestPointIndex(newPosition);
         _updatePolylines();
         _sendLocationToFirebase(newPosition);
+        _checkIfReachedDestination(newPosition);
       });
     });
   }
@@ -218,7 +236,6 @@ class _MapScreennState extends State<MapScreenn> {
         closestIndex = i;
       }
     }
-
     return closestIndex;
   }
 
@@ -228,24 +245,112 @@ class _MapScreennState extends State<MapScreenn> {
       'lng': position.longitude,
       'timestamp': DateTime.now().toIso8601String(),
     };
+    _locationRef.set(locationData); // Overwrite the last known location
+  }
 
-    _locationRef.once().then((DatabaseEvent event) {
-      final currentLocations = event.snapshot.value;
-      if (currentLocations is Map) {
-        final locationsMap = Map<String, dynamic>.from(currentLocations);
-        if (locationsMap.length >= 10) {
-          final firstLocationKey = locationsMap.keys.first;
-          _locationRef.child(firstLocationKey).remove();
-        }
-      }
-      _locationRef.push().set(locationData);
+  Future<void> _saveTripToHistory() async {
+    if (_fromPlace == null || _toPlace == null || _fullRoute.isEmpty) return;
+
+    final tripData = {
+      'start_location': {'lat': _fromPlace!.lat, 'lng': _fromPlace!.lon},
+      'end_location': {'lat': _toPlace!.lat, 'lng': _toPlace!.lon},
+      'start_address': _fromPlace!.displayName,
+      'end_address': _toPlace!.displayName,
+      'distance': _distanceText,
+      'duration': (_fullRoute.length * 0.1 / 60).toStringAsFixed(
+        2,
+      ), // Approximate duration
+      'timestamp': DateTime.now().toIso8601String(),
+      'route_points':
+          _fullRoute
+              .map(
+                (latlng) => {'lat': latlng.latitude, 'lng': latlng.longitude},
+              )
+              .toList(),
+    };
+
+    await _historyRef.push().set(tripData);
+  }
+
+  void _completeTrip() {
+    _positionStream?.cancel();
+    setState(() {
+      _tracking = false;
+      _tripInProgress = false;
     });
+  }
+
+  void _checkIfReachedDestination(LatLng currentPosition) {
+    if (_toPlace == null || !_tracking) return;
+
+    final distanceToDestination = Geolocator.distanceBetween(
+      currentPosition.latitude,
+      currentPosition.longitude,
+      _toPlace!.lat,
+      _toPlace!.lon,
+    );
+
+    if (distanceToDestination < 20) {
+      // Check if within 20 meters
+      _completeTrip();
+      _saveTripToHistory();
+      showDialog(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: const Text('Destination Reached!'),
+            content: const Text('You have arrived at your destination.'),
+            actions: <Widget>[
+              TextButton(
+                child: const Text('OK'),
+                onPressed: () {
+                  Navigator.of(context).pop();
+                },
+              ),
+            ],
+          );
+        },
+      );
+    }
+  }
+
+  void _refreshMap() async {
+    if (_tripInProgress) {
+      await _saveTripToHistory();
+      _completeTrip();
+    }
+    _positionStream?.cancel();
+    setState(() {
+      _markers.clear();
+      _polylines.clear();
+      _distanceText = '';
+      _coveredPointIndex = 0;
+      _tracking = false;
+      _tripInProgress = false;
+      _fromPlace = null;
+      _toPlace = null;
+      _fullRoute.clear();
+    });
+    _getCurrentLocation(); // Get current location again after refresh
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('World Route Finder')),
+      appBar: AppBar(
+        title: const Text('World Route Finder'),
+        actions: [
+          IconButton(
+            onPressed: () async {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const HistoryScreen()),
+              );
+            },
+            icon: const Icon(Icons.history),
+          ),
+        ],
+      ),
       body:
           _currentPosition == null
               ? const Center(child: CircularProgressIndicator())
@@ -276,23 +381,45 @@ class _MapScreennState extends State<MapScreenn> {
                         ),
                       ),
                     ),
-                  ElevatedButton(
-                    onPressed: _startTracking,
-                    child: Text(
-                      _tracking ? 'Tracking Started' : 'Start Tracking',
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      ElevatedButton(
+                        onPressed:
+                            (_tracking || _toPlace == null)
+                                ? null
+                                : _startTracking,
+                        child: Text(
+                          _tracking
+                              ? 'Tracking...'
+                              : (_toPlace == null
+                                  ? 'Select Destination'
+                                  : 'Start Tracking'),
+                        ),
+                      ),
+                    ],
                   ),
                   Expanded(
                     child: GoogleMap(
                       initialCameraPosition: CameraPosition(
                         target: _currentPosition!,
-                        zoom: 10,
+                        zoom: 15, // Increased default zoom
                       ),
                       onMapCreated: (controller) => _mapController = controller,
                       markers: _markers,
                       polylines: _polylines,
                       myLocationEnabled: true,
                       myLocationButtonEnabled: true,
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: _refreshMap,
+                        child: const Text('Refresh Map'),
+                      ),
                     ),
                   ),
                 ],
